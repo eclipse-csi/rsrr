@@ -1,3 +1,3 @@
-from .base import BaseCheck, Context
+from ..base import BaseCheck, Context
 
 __all__ = ["BaseCheck", "Context"]

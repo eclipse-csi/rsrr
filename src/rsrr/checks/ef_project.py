@@ -1,7 +1,7 @@
 import httpx
 from typing import Any
 
-from .base import BaseCheck
+from ..base import BaseCheck
 
 
 class Check(BaseCheck):
@@ -17,4 +17,10 @@ class Check(BaseCheck):
                 f"https://projects.eclipse.org/api/projects/{self.ctx.ef_project_id_normalized}",
             )
         response.raise_for_status()
-        return response.json()
+        project = response.json()[0]
+
+        return {
+            "committers": project["committers"],
+            "github": project["github"],
+            "github_repos": project["github_repos"],
+        }

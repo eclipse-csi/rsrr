@@ -19,10 +19,18 @@ def get_all_checks() -> dict:
 
 
 @click.group(invoke_without_command=True)
+@click.option("-v", "--verbose", is_flag=True, help="Enable info logging")
 @click.pass_context
-def main(ctx: click.Context) -> None:
+def main(ctx: click.Context, verbose: bool) -> None:
     """Rapid Security Review Runner -- Runs an extensible set of checks for
     Eclipse Foundation Rapid Security Reviews."""
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+    pkg_logger = logging.getLogger("rsrr")
+    pkg_logger.handlers.clear()
+    pkg_logger.addHandler(handler)
+    pkg_logger.setLevel(logging.INFO if verbose else logging.WARNING)
+    pkg_logger.propagate = False
 
     if ctx.invoked_subcommand is None:
         click.echo(ctx.get_help())
@@ -46,20 +54,77 @@ def list_cmd() -> None:
     default=None,
     help="Eclipse Foundation project ID",
 )
+@click.option(
+    "--gh-repo",
+    default=None,
+    help="GitHub repository in owner/repo format",
+)
+@click.option(
+    "--gh-token",
+    envvar="GH_TOKEN",
+    default=None,
+    help="GitHub API token (or set GH_TOKEN env var)",
+)
+@click.option(
+    "--gl-token",
+    envvar="GL_TOKEN",
+    default=None,
+    help="GitLab API token (or set GL_TOKEN env var)",
+)
+@click.option(
+    "--gl-vuln-kw",
+    multiple=True,
+    help="Keywords to search in GitLab vulnerability reports (repeatable)",
+)
+@click.option(
+    "--ctx-data",
+    type=click.Path(dir_okay=False),
+    default=None,
+    help="JSON file to read/write context data (results are merged back into this file)",
+)
 def run(
     checks: tuple[str, ...],
     ef_project_id: str | None,
+    gh_repo: str | None,
+    gh_token: str | None,
+    gl_token: str | None,
+    gl_vuln_kw: tuple[str, ...],
+    ctx_data: str | None,
 ) -> None:
     """Run checks.
 
     If CHECK arguments are provided, only those checks are run.
     Otherwise, all available checks are run.
+
+    When --ctx-data is given, existing results are loaded from the file and
+    checks with entries already present are skipped. After running, all
+    results (old and new) are written back to the same file.
     """
-    ctx = Context(ef_project_id=ef_project_id)
-    sys.exit(asyncio.run(run_async(checks, ctx)))
+    data = {}
+    if ctx_data is not None and Path(ctx_data).exists():
+        try:
+            with open(ctx_data) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            click.echo(f"Invalid JSON in {ctx_data}: {e}", err=True)
+            sys.exit(1)
+        if not isinstance(data, dict):
+            click.echo("--ctx-data file must contain a JSON object", err=True)
+            sys.exit(1)
+    ctx = Context(
+        ef_project_id=ef_project_id,
+        gh_repo=gh_repo,
+        gh_token=gh_token,
+        gl_token=gl_token,
+        gl_vuln_kw=gl_vuln_kw,
+        data=data,
+    )
+    sys.exit(asyncio.run(run_async(checks, ctx, ctx_data)))
 
 
-async def run_async(checks: tuple[str, ...], ctx: Context) -> int:
+async def run_async(
+    checks: tuple[str, ...], ctx: Context, ctx_data_path: str | None
+) -> int:
     all_checks = get_all_checks()
 
     # Filter checks if specific ones requested
@@ -82,7 +147,12 @@ async def run_async(checks: tuple[str, ...], ctx: Context) -> int:
     except ValueError as e:
         logger.error(e)
 
-    click.echo(json.dumps(ctx.data))
+    if ctx_data_path is not None:
+        with open(ctx_data_path, "w") as f:
+            json.dump(ctx.data, f, indent=2)
+            f.write("\n")
+    else:
+        click.echo(json.dumps(ctx.data, indent=2))
 
     return 0
 
